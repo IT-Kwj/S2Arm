@@ -36,7 +36,13 @@ static _Atomic int g_running, g_accepting, g_stop, g_worker_done;
 #if defined(S2A_NVN_PIPE_DEMAND_TEST)
 static _Atomic int g_workers;
 #endif
-static pthread_t g_th;
+// 后台建管线的 worker 池：首用管线在新区域里常常成批出现（走进新场景时一次几十条），
+// 单线程按序编会让每一笔都等到预算上限（真机实测 提交等待 20–36 ms，帧率塌到个位数）。
+// 默认 3 条并行编；debug.s2a.nvk_pipe_workers 可调（夹到 1..DEM_MAX_WORKERS）。
+enum { DEM_MAX_WORKERS = 4 };
+static pthread_t g_th[DEM_MAX_WORKERS];
+static _Atomic int g_nth;    // 本会话起了几条
+static _Atomic int g_alive;  // 还在跑的数量：最后一个退出才置 g_worker_done
 static pthread_mutex_t g_q_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_q_cv = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t g_life_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -122,7 +128,8 @@ static void *dem_main(void *arg) {
         pthread_mutex_unlock(&g_q_mu);
         dem_build(h);
     }
-    atomic_store_explicit(&g_worker_done, 1, memory_order_release);
+    if (atomic_fetch_sub_explicit(&g_alive, 1, memory_order_acq_rel) == 1)
+        atomic_store_explicit(&g_worker_done, 1, memory_order_release);   // 最后一条退出才算整池停下
 #if defined(S2A_NVN_PIPE_DEMAND_TEST)
     atomic_fetch_sub_explicit(&g_workers, 1, memory_order_release);
 #endif
@@ -132,9 +139,12 @@ static void *dem_main(void *arg) {
 static void dem_reap_locked(void) {
     if (atomic_load_explicit(&g_running, memory_order_acquire) &&
         atomic_load_explicit(&g_worker_done, memory_order_acquire)) {
-        if (pthread_join(g_th, NULL) == 0) {
+        int n = atomic_load_explicit(&g_nth, memory_order_acquire), joined = 0;
+        for (int i = 0; i < n; i++) if (pthread_join(g_th[i], NULL) == 0) joined++;
+        if (joined == n) {
             atomic_store_explicit(&g_running, 0, memory_order_release);
             atomic_store_explicit(&g_worker_done, 0, memory_order_release);
+            atomic_store_explicit(&g_nth, 0, memory_order_release);
         }
     }
 }
@@ -167,18 +177,27 @@ void nvn_vk_pipe_demand_start(void) {
     atomic_store_explicit(&g_stop, 0, memory_order_release);
     atomic_store_explicit(&g_accepting, 0, memory_order_release);
     atomic_store_explicit(&g_worker_done, 0, memory_order_release);
+    int want = nvn_plat_flag("nvk_pipe_workers", 3);   // 并行编管线的条数（release 包读缺省）
+    if (want < 1) want = 1;
+    if (want > DEM_MAX_WORKERS) want = DEM_MAX_WORKERS;
+    atomic_store_explicit(&g_alive, want, memory_order_release);   // 先记应到数量：worker 提前退出也不会把 done 提前置位
+    int made = 0;
+    for (int i = 0; i < want; i++) {
+        if (pthread_create(&g_th[i], NULL, dem_main, (void *)(uintptr_t)gen) != 0) break;
 #if defined(S2A_NVN_PIPE_DEMAND_TEST)
-    atomic_fetch_add_explicit(&g_workers, 1, memory_order_release);
+        atomic_fetch_add_explicit(&g_workers, 1, memory_order_release);
 #endif
-    if (pthread_create(&g_th, NULL, dem_main, (void *)(uintptr_t)gen) != 0) {
-#if defined(S2A_NVN_PIPE_DEMAND_TEST)
-        atomic_fetch_sub_explicit(&g_workers, 1, memory_order_release);
-#endif
+        made++;
+    }
+    if (made == 0) {
+        atomic_store_explicit(&g_alive, 0, memory_order_release);
         atomic_store_explicit(&g_stop, 1, memory_order_release);
         pthread_mutex_unlock(&g_life_mu);
         pthread_mutex_unlock(&g_stop_mu);
         return;
     }
+    atomic_store_explicit(&g_alive, made, memory_order_release);
+    atomic_store_explicit(&g_nth, made, memory_order_release);
     atomic_store_explicit(&g_running, 1, memory_order_release);
     atomic_store_explicit(&g_accepting, 1, memory_order_release);
     pthread_mutex_unlock(&g_life_mu);

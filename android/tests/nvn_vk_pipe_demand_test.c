@@ -12,6 +12,14 @@
 #include "rp_shader.h"
 #include "nvn_vk_pipe_demand.h"
 
+// 后台建管线是 worker 池（缺省 3 条并行编）：这里的生命周期断言按「本配置应有的条数」比。
+static int want_workers(void) {
+    int w = nvn_plat_flag("nvk_pipe_workers", 3);
+    if (w < 1) w = 1;
+    if (w > 4) w = 4;
+    return w;
+}
+
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_gpu_pipe g_installed;
 static nvn_gpu_pipe_desc g_inst_desc;
@@ -167,7 +175,7 @@ int main(void) {
     g_prog.sh[0] = (nvn_gpu_shader)(uintptr_t)0x1;
     g_prog.sh[1] = (nvn_gpu_shader)(uintptr_t)0x2;
     nvn_vk_pipe_demand_start();
-    CHECK(nvn_vk_pipe_demand_worker_count() == 1, "initial worker is tracked");
+    CHECK(nvn_vk_pipe_demand_worker_count() == want_workers(), "initial worker is tracked");
 
     uint8_t idA[32], idC[32], idB[32];
     set_ident(idA, 0xA1); set_ident(idC, 0xC3); set_ident(idB, 0xB2);
@@ -215,7 +223,7 @@ int main(void) {
     CHECK(nvn_vk_pipe_demand_worker_count() == 0, "completed worker count returns to zero");
 
     nvn_vk_pipe_demand_start();
-    CHECK(nvn_vk_pipe_demand_worker_count() == 1, "new generation owns one worker");
+    CHECK(nvn_vk_pipe_demand_worker_count() == want_workers(), "new generation owns one worker");
     nvn_gpu_pipe_desc slow; memset(&slow, 0, sizeof slow);
     slow.st[0].sh = (nvn_gpu_shader)(uintptr_t)0x31; slow.prim = 8;
     uint8_t idSlow[32]; set_ident(idSlow, 0xD4);
@@ -260,7 +268,7 @@ int main(void) {
             nvn_vk_pipe_demand_start();
             CHECK((mono_ns() - call_start) / 1000000ull < 100, "start returns instead of queuing behind stop");
             CHECK(!nvn_vk_pipe_demand_quiescent(), "quiescence is conservatively false while lifecycle serialization is busy");
-            CHECK(nvn_vk_pipe_demand_worker_count() == 1, "concurrent lifecycle calls retain the single worker");
+            CHECK(nvn_vk_pipe_demand_worker_count() >= 1 && nvn_vk_pipe_demand_worker_count() <= want_workers(), "concurrent lifecycle calls keep the live workers");
         }
         for (int i = 0; i < 1200 && !atomic_load_explicit(&stop_arg.done, memory_order_acquire); i++) {
             struct timespec ts = {0, 1000000L}; nanosleep(&ts, NULL);
@@ -276,10 +284,10 @@ int main(void) {
     }
     CHECK(stop_ms >= 450 && stop_ms < 1000, "stop stays bounded near 500ms while build is held");
     CHECK(!nvn_vk_pipe_demand_quiescent(), "timed-out stop retains live worker ownership");
-    CHECK(nvn_vk_pipe_demand_worker_count() == 1, "timed-out worker remains active");
+    CHECK(nvn_vk_pipe_demand_worker_count() >= 1 && nvn_vk_pipe_demand_worker_count() <= want_workers(), "timed-out workers remain active");
     int builds_held = g_build_calls;
     nvn_vk_pipe_demand_start();
-    CHECK(nvn_vk_pipe_demand_worker_count() == 1, "refused restart does not create a second worker");
+    CHECK(nvn_vk_pipe_demand_worker_count() >= 1 && nvn_vk_pipe_demand_worker_count() <= want_workers(), "refused restart does not create extra workers");
     nvn_vk_pipe_demand_stats(&after);
     CHECK(!nvn_vk_pipe_demand_quiescent(), "start cannot replace the live worker");
     CHECK(after.kicked == before.kicked && g_build_calls == builds_held, "refused restart does not reset state or create a worker");
@@ -296,7 +304,7 @@ int main(void) {
     CHECK(nvn_vk_pipe_demand_state(&slow, idSlow, &cached) == NVK_DEMAND_NONE, "stopped generation does not publish late result");
     nvn_vk_pipe_demand_stop();
     nvn_vk_pipe_demand_start();
-    CHECK(nvn_vk_pipe_demand_worker_count() == 1, "restarted generation owns one worker");
+    CHECK(nvn_vk_pipe_demand_worker_count() == want_workers(), "restarted generation owns one worker");
     nvn_gpu_pipe_desc next; memset(&next, 0, sizeof next);
     next.st[0].sh = (nvn_gpu_shader)(uintptr_t)0x41; next.prim = 9;
     uint8_t idNext[32]; set_ident(idNext, 0xE5);
