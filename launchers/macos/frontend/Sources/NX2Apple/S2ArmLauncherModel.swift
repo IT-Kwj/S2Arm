@@ -637,7 +637,9 @@ public final class S2ArmLauncherModel: ObservableObject {
                     //   不跟着每次重读游戏库起：出包过程中会重读好几次，每次多起两个作业进程是浪费（ExportStreamTests）
                     self.refreshUpdateHints(); self.refreshPhoneOverview()
                 }
-                if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
+                if !self.consoleSelected, !games.contains(where: { $0.id == self.selectedID }) {
+                    self.selectedID = games.first?.id
+                }
             case .failure(let error):
                 self.libraryError = error.message
                 if error.message == LibraryProvider.noLibraryMessage {   // 没有游戏库（含文件夹被删、适配层已忘掉，#1412）：不留旧列表，回欢迎页

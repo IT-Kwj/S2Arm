@@ -166,7 +166,11 @@ import S2ArmAppleAdapter
             }
             guard let u else {
                 // 指定的设备没有更新记录时仍可安装或续签。全局按钮只管当前连接的默认目标。
-                guard let device else { return .bad("当前连接没有唯一待更新的设备，请指定 device", code: 409) }
+                guard let device else {
+                    return ControlReply(code: 409, body: ControlReply.json([
+                        "ok": false, "error": "当前连接没有唯一待更新的设备，请指定 device",
+                    ]))
+                }
                 model.updatePhone(acceptStale: false, repack: [], language: "zh-Hans", device: device,
                                   acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Self.acceptFlags(a).subtracting(["acceptDropped", "acceptStale"]), ask: false)
                 return .object(["ok": true, "stale": [[String: Any]]()])
