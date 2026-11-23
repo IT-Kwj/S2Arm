@@ -409,12 +409,15 @@ public struct PhoneUpdate: Equatable, Sendable {
     public let name: String
     public let games: [GameRef]
     public let stale: [GameRef]
+    /// 旧版作业未提供连接状态时为 nil。
+    public let preferredForUpdate: Bool?
     public struct GameRef: Equatable, Sendable { public let id: String; public let name: String }
     init(catalog u: [String: Any]) {
         func refs(_ k: String) -> [GameRef] {
             (u[k] as? [[String: Any]] ?? []).compactMap { g in (g["gameId"] as? String).map { GameRef(id: $0, name: g["name"] as? String ?? $0) } }
         }
         device = u["device"] as? String ?? ""; name = u["name"] as? String ?? ""; games = refs("games"); stale = refs("stale")
+        preferredForUpdate = u["preferredForUpdate"] as? Bool
     }
 }
 

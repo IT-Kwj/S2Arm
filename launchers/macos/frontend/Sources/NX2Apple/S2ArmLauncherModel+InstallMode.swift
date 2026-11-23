@@ -42,13 +42,23 @@ extension S2ArmLauncherModel {
     /// 签名身份（一键装时）：开发者证书开着 = devcert，否则 Apple ID（0.6.0 起在 S2Arm 里登录）
     var signIdentity: String { devCert?.active == true ? "devcert" : "xcode" }
 
-    /// 游戏库右上角按钮对应的那台（多台时取第一台：按钮点下去装的是现在连着的那台，作业里按它自己的记录再判一遍）
+    /// 游戏库右上角按钮对应的那台。catalog 已按当前连接筛出唯一默认目标。
     var phoneUpdate: PhoneUpdate? { phoneUpdates.first }
 
-    /// 点「更新 iPhone 上的 S2Arm」：没有要重新出包的款直接更新；有就先弹三选一
-    func requestPhoneUpdate(language: String) {
-        guard let u = phoneUpdate else { return }   // 手机槽忙也能点：更新排到手机槽空出来（updatePhone）
-        if u.stale.isEmpty { updatePhone(acceptStale: false, repack: [], language: language) } else { updateConfirm = u }
+    /// 点顶栏时重查连接，避免两次轮询之间换了数据线。控制口指定的更新记录直接使用。
+    func requestPhoneUpdate(language: String, update: PhoneUpdate? = nil) {
+        guard let update else {
+            refresh { [weak self] in
+                guard let self, self.libraryError == nil, let current = self.phoneUpdate else { return }
+                self.requestPhoneUpdate(language: language, update: current)
+            }
+            return
+        }
+        if update.stale.isEmpty {
+            updatePhone(acceptStale: false, repack: [], language: language, device: update.device)
+        } else {
+            updateConfirm = update
+        }
     }
 
     /// 三选一的结果：repack = 更新完要排进批量出包的款（「更新并重新出这几款」），空 = 「只更新，其他稍后」

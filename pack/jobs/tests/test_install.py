@@ -1385,6 +1385,26 @@ class AssembleTests(unittest.TestCase):
         with um.patch.object(install, "online_devices", return_value=set()):
             self.assertEqual([u["device"] for u in install.phone_updates(self.c)], ["dev1", "dev2"])
 
+    def test_macos_phone_update_matches_usb_before_looking_at_update_records(self):
+        import target
+
+        self._update()
+        older = dict(hardwareProperties=dict(udid="dev1"), connectionProperties=dict(transportType="localNetwork"))
+        wired = dict(hardwareProperties=dict(udid="DEV-2"), connectionProperties=dict(transportType="wired"))
+        with um.patch.object(target, "device_list", return_value=([older, wired], "", 0, "")):
+            rows = install.phone_updates(self.c, match_mac_connection=True)
+            self.assertEqual({r["device"]: r["preferredForUpdate"] for r in rows}, {"dev1": False})
+
+            layout.save_device(self.c, "dev2", dict(layout.load_device(self.c, "dev1")))
+            rows = install.phone_updates(self.c, match_mac_connection=True)
+            self.assertEqual({r["device"]: r["preferredForUpdate"] for r in rows}, {"dev1": False, "dev2": True})
+            self.assertEqual(install._pick_device([older, wired], "dev2", install=True), (wired, ""))
+
+        for devices, expected in (([older], ["dev1"]), ([], [])):
+            with self.subTest(devices=devices), um.patch.object(target, "device_list", return_value=(devices, "", 0, "")):
+                rows = install.phone_updates(self.c, match_mac_connection=True)
+                self.assertEqual([r["device"] for r in rows if r["preferredForUpdate"]], expected)
+
     def test_phone_updates_lists_kept_modules_on_current_shell(self):
         """壳是本版、但甲有运行时留下、已收回还没补进 iPhone 件的 NRO（#8be819）→ 照样列这台，kept = [甲]；没有留下的 → 空"""
         A = self.A

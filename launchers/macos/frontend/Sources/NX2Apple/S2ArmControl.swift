@@ -156,9 +156,17 @@ import S2ArmAppleAdapter
         case ("POST", "/update-phone"):   // 更新 iPhone 上的 S2Arm（v0.3.0）：同库页右上角按钮；有要重新出包的款没给 acceptStale → 409 列出它们
             if let b = phoneBusy() { return b }
             let device = (a["device"] as? String).flatMap { $0.isEmpty ? nil : $0 }   // 同 /install：连着多台时指定哪台
-            guard let u = model.phoneUpdate else {
-                // 这台电脑没有要更新的装机记录：点了 device 就照界面手机条按钮（安装 / 续签）直接装壳——新手机（没有装壳记录）也走这条（0.6.0 冷容器装壳）
-                guard let device else { return ControlReply(code: 409, body: ControlReply.json(["ok": false, "error": "按这台电脑的装机记录，手机上的 S2Arm 已是本版"])) }
+            let u: PhoneUpdate?
+            if let device {
+                let updates = model.provider.library.phoneUpdates
+                let named = updates.filter { $0.name == device }
+                u = updates.first { $0.device == device } ?? (named.count == 1 ? named.first : nil)
+            } else {
+                u = model.phoneUpdate
+            }
+            guard let u else {
+                // 指定的设备没有更新记录时仍可安装或续签。全局按钮只管当前连接的默认目标。
+                guard let device else { return .bad("当前连接没有唯一待更新的设备，请指定 device", code: 409) }
                 model.updatePhone(acceptStale: false, repack: [], language: "zh-Hans", device: device,
                                   acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Self.acceptFlags(a).subtracting(["acceptDropped", "acceptStale"]), ask: false)
                 return .object(["ok": true, "stale": [[String: Any]]()])
@@ -166,13 +174,13 @@ import S2ArmAppleAdapter
             let accept = a["acceptStale"] as? Bool ?? false
             let stale = u.stale.map { ["gameId": $0.id, "name": $0.name] }
             if a["ask"] as? Bool == true {   // 同玩家点库页右上角按钮：有要重新出包的款弹三选一（玩家在窗口里选），没有就直接更新
-                model.requestPhoneUpdate(language: "zh-Hans"); return .object(["ok": true, "asked": !u.stale.isEmpty, "stale": stale])
+                model.requestPhoneUpdate(language: "zh-Hans", update: u); return .object(["ok": true, "asked": !u.stale.isEmpty, "stale": stale])
             }
             if !u.stale.isEmpty, !accept {
                 return ControlReply(code: 409, body: ControlReply.json(["ok": false, "error": "这几款要按新版重新出包，重新出包前暂时打不开：带 acceptStale 确认（repack 为真时更新完把它们排进批量出包、出完自动装）", "stale": stale]))
             }
             model.updatePhone(acceptStale: accept, repack: a["repack"] as? Bool == true ? u.stale.map(\.id) : [], language: "zh-Hans",
-                              device: device,
+                              device: u.device,
                               acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Self.acceptFlags(a).subtracting(["acceptDropped", "acceptStale"]), ask: false)   // 同 /install：会挤掉别的电脑装的款时原样失败，带 acceptDropped 再发
             return .object(["ok": true, "stale": stale])
         case ("POST", "/phone-identity"):   // 把签名身份交给手机上的 S2Arm（同总控台「把签名身份交给手机」）：别的工具装的 S2Arm 团队对得上也交；force = 交过了也重交

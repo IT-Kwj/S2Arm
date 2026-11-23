@@ -2153,9 +2153,9 @@ def catalog(c):
             continue
         if isinstance(r, dict):
             jobs.append(r)
-    try:   # 「更新 iPhone 上的 S2Arm」：各台手机的设备记录里壳比本版旧的（只读本机记录，不连手机，install.phone_updates）
+    try:   # 「更新 iPhone 上的 S2Arm」：各台手机的设备记录里壳比本版旧的；Mac 另标当前连接的默认目标
         import install
-        phone_updates = install.phone_updates(c)
+        phone_updates = install.phone_updates(c, match_mac_connection=sys.platform == "darwin")
     except (Failure, OSError, ValueError):   # 算不出本版壳号（开发树没出过壳等）：不提示，不挡游戏库
         phone_updates = []
     # 这台电脑往几台手机装过游戏（设备记录里有款的）：启动器更新弹窗据此把按钮写成「更新启动器和 iPhone App」（11-16 维护者「点一次完成整个流程」）

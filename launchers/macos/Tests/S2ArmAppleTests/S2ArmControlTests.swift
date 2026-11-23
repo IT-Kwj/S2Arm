@@ -68,6 +68,18 @@ import AppKit
         XCTAssertEqual(model.lastUpdateArgs?.device, "OLD-UDID")
     }
 
+    func testExplicitNewPhoneDoesNotUseAnotherPhonesStaleGames() async {
+        model.phoneUpdates = [PhoneUpdate(catalog: [
+            "device": "OLD-UDID", "name": "甲",
+            "stale": [["gameId": "0100000000010000", "name": "旧机的游戏"]],
+        ])]
+        let (code, body) = await post("/update-phone", ["device": "NEW-UDID", "ask": true])
+        XCTAssertEqual(code, 200)
+        XCTAssertNil(model.updateConfirm)
+        XCTAssertEqual(model.lastUpdateArgs?.device, "NEW-UDID")
+        XCTAssertEqual((body["stale"] as? [[String: Any]])?.count, 0)
+    }
+
     /// s2armctl dismiss（「关掉提示框」）要关得掉新功能大窗和更新弹窗，同玩家点关闭；修前只清报错、弹窗原样开着
     func testDismissClosesFeatureSpotlightAndUpdatePopup() async {
         for popup: [String: Any] in [["kind": "feature", "id": "v0.0.0-probe"], ["kind": "update", "version": "99.0.0"]] {

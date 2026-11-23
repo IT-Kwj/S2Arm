@@ -385,7 +385,9 @@ def _pick_device(devices, want, install=False):
     phones = [d for d in devices if is_candidate(d)]
     if want:
         def named(d):
-            return want in (d.get("identifier"), d.get("hardwareProperties", {}).get("udid"), (d.get("deviceProperties", {}).get("name") or "").strip())
+            ids = (d.get("identifier"), d.get("hardwareProperties", {}).get("udid"))
+            name = (d.get("deviceProperties", {}).get("name") or "").strip()
+            return want == name or any(_udid_cmp(want) == _udid_cmp(key) for key in ids if key)
         chosen = [d for d in phones if named(d)]
         if chosen:
             return chosen[0], ""
@@ -3916,10 +3918,10 @@ def shell_outdated(c, rec, sid, games=None):
                 stale=[dict(gameId=g, name=names[g]) for g in stale]) if games else None
 
 
-def phone_updates(c):
+def phone_updates(c, *, match_mac_connection=False):
     """游戏库页右上角「更新 iPhone 上的 S2Arm」：各台手机的设备记录里，壳比本版旧的 → [{device, name, fromShell, toShell, games, stale, kept, apps}]。
     apps = 壳号旧了的独立 App（设备记录 apps，0.6.3）：只装了独立 App 的手机也出按钮（update_phone 只重签它们、不装通用壳）。
-    只读本机记录（不连手机、不跑出包），catalog 每次带上；没有装过 iPhone 的玩家不算壳号"""
+    版本取本机记录；Mac 的 catalog 另标当前连接的默认更新对象，不问设备上的 App、不跑出包。"""
     recs = [(k, r) for k, r in layout.devices(c) if isinstance(r, dict) and (r.get("games") and r.get("shellId") or r.get("apps"))]
     if not recs:
         return []
@@ -3939,7 +3941,21 @@ def phone_updates(c):
                           games=[dict(gameId=g, name=names.get(g, g)) for g in sorted(rec.get("games") or {})] if rec.get("shellId") else [], stale=[])
             out.append(dict(device=key, name=(rec.get("signed") or {}).get("device") or "", **st, kept=[dict(gameId=g, name=g) for g in kept],
                             apps=[dict(gameId=g, name=names[g.upper()]) for g in old]))
-    # D-XYNG：两个启动器的「更新」按钮都取第一条。连着的那台排前（稳定排序，其余照原顺序）：原先按记录文件名排，游戏库里留着一台
+    if match_mac_connection and out:
+        import target
+        # 复用装机清单的有线优先规则，先从所有在线设备选，再和待更新记录比。
+        # 有线这台已经是本版时，不把另一台历史设备的更新推到首页。
+        devices, why, _, _ = target.device_list(c, timeout=3)
+        device, _ = _pick_device(devices, "") if not why else (None, "")
+        keys = set()
+        if device:
+            ids = (device.get("identifier"), device.get("hardwareProperties", {}).get("udid"))
+            keys = {_udid_cmp(key) for key in ids if key}
+        for row in out:
+            row["preferredForUpdate"] = _udid_cmp(row["device"]) in keys
+        return out
+
+    # D-XYNG：Windows 启动器的「更新」按钮取第一条。连着的那台排前（稳定排序，其余照原顺序）：原先按记录文件名排，游戏库里留着一台
     #   不在线的旧设备时，按钮永远去找它、报「没列出来」，连着的这台也旧却轮不到。键比较同 win_udid（设备服务的写法可能差在短横 / 大小写）
     online = {_udid_cmp(u) for u in online_devices(c)} if len(out) > 1 else set()   # 本机回环查设备服务，毫秒级；只有一条时不用排
     return sorted(out, key=lambda u: _udid_cmp(u["device"]) not in online) if online else out

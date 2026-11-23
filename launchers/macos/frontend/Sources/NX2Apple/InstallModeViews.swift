@@ -244,25 +244,29 @@ struct PhoneUpdateButton: View {
     private func t(_ id: String) -> String { BackendText.launcherText(id, language: language) }
 
     var body: some View {
-        if model.phoneUpdate != nil {
-            Button { model.requestPhoneUpdate(language: language) } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "arrow.up.circle")
-                    Text(t("update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
+        Group {
+            if model.phoneUpdate != nil {
+                Button { model.requestPhoneUpdate(language: language) } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "arrow.up.circle")
+                        Text(t("update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
+                    }
                 }
+                .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                .controllerID("top.phoneUpdate").controllerShortcut(.rightTrigger, focused: true)
+            } else {
+                Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
             }
-            .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
-            .controllerID("top.phoneUpdate").controllerShortcut(.rightTrigger, focused: true)
-            .alert(t("update.confirm.title"), isPresented: Binding(get: { model.updateConfirm != nil }, set: { if !$0 { model.updateConfirm = nil } }),
-                   presenting: model.updateConfirm) { u in
-                Button(t("update.confirm.repack")) { model.updatePhone(acceptStale: true, repack: u.stale.map(\.id), language: language) }
-                Button(t("update.confirm.later")) { model.updatePhone(acceptStale: true, repack: [], language: language) }
-                Button(t("update.confirm.cancel"), role: .cancel) {}
-            } message: { u in
-                Text(t("update.confirm.body").replacingOccurrences(of: "{0}", with: u.stale.map(\.name).joined(separator: "」「"))
-                        .replacingOccurrences(of: "{1}", with: "\(u.games.count - u.stale.count)"))
-            }
-            // 更新会让手机上别的电脑装的游戏暂时不能玩：在更新页里问（PhoneJobPanel.dropAsk），不在这里弹框
         }
+        .alert(t("update.confirm.title"), isPresented: Binding(get: { model.updateConfirm != nil }, set: { if !$0 { model.updateConfirm = nil } }),
+               presenting: model.updateConfirm) { u in
+            Button(t("update.confirm.repack")) { model.updatePhone(acceptStale: true, repack: u.stale.map(\.id), language: language, device: u.device) }
+            Button(t("update.confirm.later")) { model.updatePhone(acceptStale: true, repack: [], language: language, device: u.device) }
+            Button(t("update.confirm.cancel"), role: .cancel) {}
+        } message: { u in
+            Text(t("update.confirm.body").replacingOccurrences(of: "{0}", with: u.stale.map(\.name).joined(separator: "」「"))
+                    .replacingOccurrences(of: "{1}", with: "\(u.games.count - u.stale.count)"))
+        }
+        // 更新会让手机上别的电脑装的游戏暂时不能玩：到更新页里确认（PhoneJobPanel.dropAsk）。
     }
 }

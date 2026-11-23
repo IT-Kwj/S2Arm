@@ -586,7 +586,10 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
         // 只按真冲突跳过：手机正被装机 / 推包占着（phoneBusy）；出包等别的作业在跑照样收（升级首启迁移几分钟，原先 busy 整轮跳过拖到第 360 秒）
-        if phoneBusy { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
+        if phoneBusy { return false }
+        // 更新记录还在时借用这一轮刷新连接状态，换线或拔线后首页也会收起旧设备的提醒。
+        let refreshUpdateTarget = !provider.library.phoneUpdates.isEmpty
+        defer { if refreshUpdateTarget { refresh() } }
         let r: [String: Any]
         do {
             r = try await provider.client.perform("phoneKeptPull").result
@@ -602,7 +605,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         let batch = device + ":" + kept.sorted().joined(separator: ",") + (shellUpdate ? ":shell" : "")
         if keptAutoTried.contains(batch) || phoneBusy { return false }
         keptAutoTried.insert(batch)
-        refresh {}
+        if !refreshUpdateTarget { refresh {} }
         return false
     }
 
@@ -626,7 +629,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             switch result {
             case .success(let games):
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
-                self.phoneUpdates = self.provider.library.phoneUpdates
+                self.phoneUpdates = self.provider.library.phoneUpdates.filter { $0.preferredForUpdate != false }
                 self.phoneDevices = self.provider.library.phoneDevices
                 if !self.startupLoopsStarted {
                     self.startupLoopsStarted = true; self.resumeSGradeWatch(); self.keptModulesLoop(); self.devCertWatchLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop()
