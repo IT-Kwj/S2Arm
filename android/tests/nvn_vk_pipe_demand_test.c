@@ -14,7 +14,7 @@
 
 // 后台建管线是 worker 池（缺省 3 条并行编）：这里的生命周期断言按「本配置应有的条数」比。
 static int want_workers(void) {
-    int w = nvn_plat_flag("nvk_pipe_workers", 3);
+    int w = nvn_plat_flag("nvk_pipe_workers", 4);   // 与 nvn_vk_pipe_demand.c 的缺省同值：缺省改了这里也改
     if (w < 1) w = 1;
     if (w > 4) w = 4;
     return w;
@@ -176,7 +176,6 @@ int main(void) {
     g_prog.sh[1] = (nvn_gpu_shader)(uintptr_t)0x2;
     nvn_vk_pipe_demand_start();
     CHECK(nvn_vk_pipe_demand_worker_count() == want_workers(), "initial worker is tracked");
-
     uint8_t idA[32], idC[32], idB[32];
     set_ident(idA, 0xA1); set_ident(idC, 0xC3); set_ident(idB, 0xB2);
 

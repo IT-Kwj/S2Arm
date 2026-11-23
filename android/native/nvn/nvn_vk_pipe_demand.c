@@ -87,6 +87,24 @@ static void dem_key(const nvn_gpu_pipe_desc *d, const uint8_t ident[32], struct 
     memcpy(k->ident, ident, 32);
 }
 
+// 当前帧正在等的管线：把它挪到队首，其余 worker 接下来先编它。
+// 帧率尖峰的直接来源是「要的那条排在队尾」——FIFO 下 3 条 worker 得先把前面二十几条编完，
+// 提交线程只能干等（真机实测单次 275 ms）。这里只调顺序，不改语义。
+static void dem_prioritize(const struct dem_key *want) {
+    pthread_mutex_lock(&g_q_mu);
+    for (int i = 1; i < qn; i++) {
+        int slot = (qh + i) % DEM_MAX, h = q[slot];
+        struct dem_key k;
+        dem_key(&g_jobs[h].desc, g_jobs[h].ident, &k);
+        if (!memcmp(&k, want, sizeof k)) {
+            q[slot] = q[qh]; q[qh] = h;
+            __atomic_fetch_add(&g_st.prioritized, 1, __ATOMIC_RELAXED);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_q_mu);
+}
+
 static void dem_build(int h) {
     struct dem_job j = g_jobs[h];   // 入队前写好，取到后独占读
     g_jobs[h].used = 0;
@@ -110,7 +128,20 @@ static void dem_build(int h) {
     nvn_gpu_rc r = nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &err);
     rp_shader_prog_return(j.ident);
     if (nvn_gpu_ok(r) && pipe) {
-        __atomic_fetch_add(&g_st.built, 1, __ATOMIC_RELAXED);
+        uint64_t nbuilt = __atomic_fetch_add(&g_st.built, 1, __ATOMIC_RELAXED) + 1;
+        if (!(nbuilt % 32)) {   // 每 32 条打一行：看这一局到底建了多少条、队列峰值多深（判断 burst 是真新管线还是重复建）
+            pthread_mutex_lock(&g_q_mu); int depth = qn; pthread_mutex_unlock(&g_q_mu);
+            char b[240];
+            snprintf(b, sizeof b, "后台建管线：已建 %llu（登记 %llu / 去重 %llu / 失败 %llu / 超时 %llu / 队满 %llu / 插队 %llu），当前排队 %d（池 %d 条）",
+                     (unsigned long long)nbuilt, (unsigned long long)__atomic_load_n(&g_st.kicked, __ATOMIC_RELAXED),
+                     (unsigned long long)__atomic_load_n(&g_st.dedup, __ATOMIC_RELAXED),
+                     (unsigned long long)__atomic_load_n(&g_st.failed, __ATOMIC_RELAXED),
+                     (unsigned long long)__atomic_load_n(&g_st.timeouts, __ATOMIC_RELAXED),
+                     (unsigned long long)__atomic_load_n(&g_st.full, __ATOMIC_RELAXED),
+                     (unsigned long long)__atomic_load_n(&g_st.prioritized, __ATOMIC_RELAXED),
+                     depth, atomic_load_explicit(&g_nth, memory_order_relaxed));
+            nvn_plat_log(NVN_PLAT_LOG_INFO, "pipe-demand", b);
+        }
         dem_publish(j.gen, h, pipe, 0, NULL);
     } else {
         __atomic_fetch_add(&g_st.failed, 1, __ATOMIC_RELAXED);
@@ -177,7 +208,7 @@ void nvn_vk_pipe_demand_start(void) {
     atomic_store_explicit(&g_stop, 0, memory_order_release);
     atomic_store_explicit(&g_accepting, 0, memory_order_release);
     atomic_store_explicit(&g_worker_done, 0, memory_order_release);
-    int want = nvn_plat_flag("nvk_pipe_workers", 3);   // 并行编管线的条数（release 包读缺省）
+    int want = nvn_plat_flag("nvk_pipe_workers", 4);   // 并行编管线的条数（release 包读缺省）
     if (want < 1) want = 1;
     if (want > DEM_MAX_WORKERS) want = DEM_MAX_WORKERS;
     atomic_store_explicit(&g_alive, want, memory_order_release);   // 先记应到数量：worker 提前退出也不会把 done 提前置位
@@ -352,6 +383,7 @@ int nvn_vk_pipe_demand_wait(const nvn_gpu_pipe_desc *d, const uint8_t prog_ident
     if (nvn_gpu_pipe_lookup(d, out)) return 0;
     if (!nvn_vk_pipe_demand_on() || !atomic_load_explicit(&g_accepting, memory_order_acquire)) return 3;
     struct dem_key key; dem_key(d, prog_identity, &key);
+    dem_prioritize(&key);   // 先让它排到队首，再等
     void *obj = NULL; int code = 0;
     int w = nvk_pp_wait(&g_pp, &key, dem_eq, wait_ms, &obj, &code, why, why_cap);
     if (w == NVK_PP_WAIT_READY) { *out = (nvn_gpu_pipe)obj; return 0; }
